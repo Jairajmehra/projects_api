@@ -1,0 +1,148 @@
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from pyairtable import Api
+import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+CORS(app)
+
+# Load configuration from environment variables
+AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
+BASE_ID = os.environ.get('BASE_ID')
+TABLE_NAME = os.environ.get('TABLE_NAME')
+
+# Validate required environment variables
+if not all([AIRTABLE_API_KEY, BASE_ID, TABLE_NAME]):
+    logger.error("Missing required environment variables. Please check your app.yaml configuration.")
+    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, or TABLE_NAME")
+
+# Initialize Airtable
+try:
+    api = Api(AIRTABLE_API_KEY)
+    table = api.table(BASE_ID, TABLE_NAME)
+    logger.info("Airtable connection initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Airtable connection: {str(e)}")
+    raise
+
+# Global cache for projects
+PROJECTS_CACHE = []
+
+def format_project(record):
+    """Format a single project record"""
+    try:
+        fields = record["fields"]
+        brochure_url = ""
+        if "Brochure" in fields and fields["Brochure"]:
+            brochure_url = fields["Brochure"][0].get("url", "")
+
+        return {
+            "rera": fields.get("RERA Number", ""),
+            "name": fields.get("Project Name", ""),
+            "locality": fields.get("District", ""),
+            "propertyType": fields.get("Type", ""),
+            "unitSizes": fields.get("Average Carpet Area of Units (Sq Mtrs)", ""),
+            "brochureLink": brochure_url,
+            "bhk": "3 BHK"
+        }
+    except Exception as e:
+        logger.error(f"Error formatting project record: {str(e)}")
+        return None
+
+def init_cache():
+    """Initialize the cache without using Flask context"""
+    global PROJECTS_CACHE
+    try:
+        records = table.all()
+        PROJECTS_CACHE = [format_project(record) for record in records]
+        print(f"Cache initialized successfully with {len(PROJECTS_CACHE)} projects")
+    except Exception as e:
+        logger.error(f"Error initializing cache: {str(e)}")
+        PROJECTS_CACHE = []
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "cache_size": len(PROJECTS_CACHE)
+    })
+
+@app.route("/update_cache", methods=["GET"])
+def update_cache():
+    """Endpoint to manually update the cache"""
+    try:
+        init_cache()
+        return jsonify({
+            "status": "success",
+            "message": "Cache updated successfully",
+            "total_projects": len(PROJECTS_CACHE)
+        })
+    except Exception as e:
+        logger.error(f"Cache update failed: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route("/projects", methods=["GET"])
+def get_projects():
+    """Get paginated projects from cache"""
+    try:
+        # If cache is empty, initialize it
+        if not PROJECTS_CACHE:
+            init_cache()
+            
+        page = max(1, int(request.args.get("page", 1)))
+        limit = min(50, max(1, int(request.args.get("limit", 12))))
+        
+        start = (page - 1) * limit
+        end = start + limit
+        
+        # Ensure we don't exceed array bounds
+        if start >= len(PROJECTS_CACHE):
+            return jsonify({
+                "status": "success",
+                "projects": [],
+                "total": len(PROJECTS_CACHE),
+                "page": page,
+                "limit": limit,
+                "has_more": False,
+                "message": "Page number exceeds available data"
+            })
+        
+        return jsonify({
+            "status": "success",
+            "projects": PROJECTS_CACHE[start:end],
+            "total": len(PROJECTS_CACHE),
+            "page": page,
+            "limit": limit,
+            "has_more": end < len(PROJECTS_CACHE)
+        })
+    except ValueError as e:
+        logger.error(f"Invalid pagination parameters: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Invalid page or limit parameter"
+        }), 400
+    except Exception as e:
+        logger.error(f"Error fetching projects: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
+if __name__ == "__main__":
+    # Initialize cache at startup
+    init_cache()
+    # Development server
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    
