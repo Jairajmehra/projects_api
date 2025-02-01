@@ -9,17 +9,8 @@ automatic_scaling:
   max_instances: 5
   target_throughput_utilization: 0.8
 
-skip_files:
-- ^(.*/)?\.env$
-- ^(.*/)?\.git/.*$
-- ^(.*/)?\.gitignore$
-- ^(.*/)?\.pytest_cache/.*$
-- ^(.*/)?\.vscode/.*$
-- ^(.*/)?__pycache__/.*$
-- ^(.*/)?\.idea/.*$
-
 env_variables:
   AIRTABLE_API_KEY: "pat58wdyhkYY9AaF9.c1ec6de961cb307900f1bfb3d274f69814b1942cec3055650d96190319d432a6"
   BASE_ID: "appr3XO1WxxZjPCJg"
   TABLE_NAME: "Residential"
-  Commercial_TABLE_NAME: "Commercial"
+  COMMERCIAL_TABLE_NAME: "Commercial"

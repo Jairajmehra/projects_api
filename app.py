@@ -17,16 +17,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
-
 # Load configuration from environment variables
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
 BASE_ID = os.environ.get('BASE_ID')
 TABLE_NAME = os.environ.get('TABLE_NAME')
 COMMERCIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME')
 # Validate required environment variables
-if not all([AIRTABLE_API_KEY, BASE_ID, TABLE_NAME]):
+if not all([AIRTABLE_API_KEY, BASE_ID, TABLE_NAME, COMMERCIAL_TABLE_NAME]):
     logger.error("Missing required environment variables. Please check your app.yaml configuration.")
-    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, or TABLE_NAME")
+    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, TABLE_NAME, or COMMERCIAL_TABLE_NAME")
 
 # Initialize Airtable
 try:
@@ -92,7 +91,6 @@ def format_commercial_project(record):
             "promoterAddress": fields.get("Promoter Address", ""),
             "mobile": fields.get("Mobile", ""),
             "projectType": fields.get("Project Type", ""),
-            "projectStatus": fields.get("Project Status", ""),
             "district": fields.get("District", ""),
             "approvedDate": fields.get("Approved on", ""),
             "originalEndDate": fields.get("Project Original End Date",""),
