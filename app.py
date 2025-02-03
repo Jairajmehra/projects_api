@@ -158,7 +158,7 @@ def update_cache():
 
 @app.route("/commercial_projects", methods=["GET"])
 def get_commercial_projects():
-    """Get paginated commercial projects from cache"""
+    """Get paginated commercial projects from cache with offset"""
     try:
         # If cache is empty, initialize it
         if not COMMERCIAL_PROJECTS_CACHE:
@@ -166,8 +166,10 @@ def get_commercial_projects():
             
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 12))))
+        offset = max(0, int(request.args.get("offset", 0)))
         
-        start = (page - 1) * limit
+        # Calculate start and end indices with offset
+        start = ((page - 1) * limit) + offset
         end = start + limit
         
         # Ensure we don't exceed array bounds
@@ -178,6 +180,7 @@ def get_commercial_projects():
                 "total": len(COMMERCIAL_PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
+                "offset": offset,
                 "has_more": False,
                 "message": "Page number exceeds available data"
             })
@@ -188,13 +191,14 @@ def get_commercial_projects():
             "total": len(COMMERCIAL_PROJECTS_CACHE),
             "page": page,
             "limit": limit,
+            "offset": offset,
             "has_more": end < len(COMMERCIAL_PROJECTS_CACHE)
         })
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid page or limit parameter"
+            "message": "Invalid page, limit, or offset parameter"
         }), 400
     except Exception as e:
         logger.error(f"Error fetching commercial projects: {str(e)}")
@@ -205,7 +209,7 @@ def get_commercial_projects():
     
 @app.route("/projects", methods=["GET"])
 def get_projects():
-    """Get paginated projects from cache"""
+    """Get paginated projects from cache with offset"""
     try:
         # If cache is empty, initialize it
         if not PROJECTS_CACHE:
@@ -213,9 +217,24 @@ def get_projects():
             
         page = max(1, int(request.args.get("page", 1)))
         limit = min(50, max(1, int(request.args.get("limit", 12))))
+        offset = max(0, int(request.args.get("offset", 0)))
         
-        start = (page - 1) * limit
+        # Calculate start and end indices with offset
+        start = ((page - 1) * limit) + offset
         end = start + limit
+        
+        # Check if offset exceeds total available data
+        if offset >= len(PROJECTS_CACHE):
+            return jsonify({
+                "status": "success",
+                "projects": [],
+                "total": len(PROJECTS_CACHE),
+                "page": page,
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "message": "Offset exceeds available data"
+            })
         
         # Ensure we don't exceed array bounds
         if start >= len(PROJECTS_CACHE):
@@ -225,6 +244,7 @@ def get_projects():
                 "total": len(PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
+                "offset": offset,
                 "has_more": False,
                 "message": "Page number exceeds available data"
             })
@@ -235,13 +255,14 @@ def get_projects():
             "total": len(PROJECTS_CACHE),
             "page": page,
             "limit": limit,
+            "offset": offset,
             "has_more": end < len(PROJECTS_CACHE)
         })
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid page or limit parameter"
+            "message": "Invalid page, limit, or offset parameter"
         }), 400
     except Exception as e:
         logger.error(f"Error fetching projects: {str(e)}")
