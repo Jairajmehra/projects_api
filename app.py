@@ -40,6 +40,8 @@ except Exception as e:
 # Global cache for projects
 PROJECTS_CACHE = []
 COMMERCIAL_PROJECTS_CACHE = []
+COMMERCIAL_PROJECTS_NAME_INDEX = {}
+RESIDENTIAL_PROJECTS_NAME_INDEX = {}
 
 def format_project(record):
     """Format a single project record"""
@@ -116,6 +118,32 @@ def format_commercial_project(record):
         logger.error(f"Record that caused error: {record}")
         return None
 
+def build_commercial_projects_index():
+    """Build an in-memory index for fast project name searches"""
+    global COMMERCIAL_PROJECTS_NAME_INDEX
+    COMMERCIAL_PROJECTS_NAME_INDEX = {}
+    
+    for idx, project in enumerate(COMMERCIAL_PROJECTS_CACHE):
+        if project and project.get('name'):
+            # Create normalized key for case-insensitive search
+            name_key = project['name'].lower()
+            if name_key not in COMMERCIAL_PROJECTS_NAME_INDEX:
+                COMMERCIAL_PROJECTS_NAME_INDEX[name_key] = []
+            COMMERCIAL_PROJECTS_NAME_INDEX[name_key].append(idx)
+
+def build_residential_projects_index():
+    """Build an in-memory index for fast residential project name searches"""
+    global RESIDENTIAL_PROJECTS_NAME_INDEX
+    RESIDENTIAL_PROJECTS_NAME_INDEX = {}
+    
+    for idx, project in enumerate(PROJECTS_CACHE):
+        if project and project.get('name'):
+            # Create normalized key for case-insensitive search
+            name_key = project['name'].lower()
+            if name_key not in RESIDENTIAL_PROJECTS_NAME_INDEX:
+                RESIDENTIAL_PROJECTS_NAME_INDEX[name_key] = []
+            RESIDENTIAL_PROJECTS_NAME_INDEX[name_key].append(idx)
+
 def init_cache():
     """Initialize the cache without using Flask context"""
     global PROJECTS_CACHE
@@ -125,7 +153,9 @@ def init_cache():
         commercial_records = commercial_table.all()
         PROJECTS_CACHE = [format_project(record) for record in records]
         COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
-        print(f"Cache initialized successfully with {len(PROJECTS_CACHE)} projects")
+        build_commercial_projects_index()
+        build_residential_projects_index()
+        print(f"Cache initialized successfully with {len(PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_PROJECTS_CACHE)} commercial projects")
     except Exception as e:
         logger.error(f"Error initializing cache: {str(e)}")
         PROJECTS_CACHE = []
@@ -271,9 +301,97 @@ def get_projects():
             "message": "Internal server error"
         }), 500
 
+@app.route("/search_commercial_projects", methods=["GET"])
+def search_commercial_projects():
+    """Search commercial projects by name with pagination"""
+    try:
+        search_term = request.args.get("q", "").lower().strip()
+        limit = min(100, max(1, int(request.args.get("limit", 12))))
+        
+        if not search_term:
+            return jsonify({
+                "status": "error",
+                "message": "Search term is required"
+            }), 400
+
+        # Find matching projects
+        matching_indices = set()
+        for name_key in COMMERCIAL_PROJECTS_NAME_INDEX:
+            if name_key.startswith(search_term):
+                matching_indices.update(COMMERCIAL_PROJECTS_NAME_INDEX[name_key])
+        
+        # Convert to list and sort
+        matching_projects = [COMMERCIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
+        matching_projects.sort(key=lambda x: x['name'].lower())
+        
+        return jsonify({
+            "status": "success",
+            "projects": matching_projects[:limit],
+            "total": len(matching_projects),
+            "limit": limit,
+            "has_more": len(matching_projects) > limit
+        })
+        
+    except ValueError as e:
+        logger.error(f"Invalid search parameters: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Invalid parameters"
+        }), 400
+    except Exception as e:
+        logger.error(f"Error in search: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
+@app.route("/search_residential_projects", methods=["GET"])
+def search_residential_projects():
+    """Search residential projects by name with pagination"""
+    try:
+        search_term = request.args.get("q", "").lower().strip()
+        limit = min(100, max(1, int(request.args.get("limit", 12))))
+        
+        if not search_term:
+            return jsonify({
+                "status": "error",
+                "message": "Search term is required"
+            }), 400
+
+        # Find matching projects
+        matching_indices = set()
+        for name_key in RESIDENTIAL_PROJECTS_NAME_INDEX:
+            if name_key.startswith(search_term):
+                matching_indices.update(RESIDENTIAL_PROJECTS_NAME_INDEX[name_key])
+        
+        # Convert to list and sort
+        matching_projects = [PROJECTS_CACHE[idx] for idx in matching_indices]
+        matching_projects.sort(key=lambda x: x['name'].lower())
+        
+        return jsonify({
+            "status": "success",
+            "projects": matching_projects[:limit],
+            "total": len(matching_projects),
+            "limit": limit,
+            "has_more": len(matching_projects) > limit
+        })
+        
+    except ValueError as e:
+        logger.error(f"Invalid search parameters: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Invalid parameters"
+        }), 400
+    except Exception as e:
+        logger.error(f"Error in search: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
 if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8086)))
     
