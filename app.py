@@ -303,10 +303,11 @@ def get_projects():
 
 @app.route("/search_commercial_projects", methods=["GET"])
 def search_commercial_projects():
-    """Search commercial projects by name with pagination"""
+    """Search commercial projects by name with pagination and offset"""
     try:
         search_term = request.args.get("q", "").lower().strip()
         limit = min(100, max(1, int(request.args.get("limit", 12))))
+        offset = max(0, int(request.args.get("offset", 0)))
         
         if not search_term:
             return jsonify({
@@ -324,19 +325,36 @@ def search_commercial_projects():
         matching_projects = [COMMERCIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
         matching_projects.sort(key=lambda x: x['name'].lower())
         
+        # Apply offset and limit
+        start = offset
+        end = offset + limit
+        
+        # Check if offset exceeds total available data
+        if offset >= len(matching_projects):
+            return jsonify({
+                "status": "success",
+                "projects": [],
+                "total": len(matching_projects),
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "message": "Offset exceeds available data"
+            })
+        
         return jsonify({
             "status": "success",
-            "projects": matching_projects[:limit],
+            "projects": matching_projects[start:end],
             "total": len(matching_projects),
             "limit": limit,
-            "has_more": len(matching_projects) > limit
+            "offset": offset,
+            "has_more": end < len(matching_projects)
         })
         
     except ValueError as e:
         logger.error(f"Invalid search parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid parameters"
+            "message": "Invalid parameters for limit or offset"
         }), 400
     except Exception as e:
         logger.error(f"Error in search: {str(e)}")
@@ -347,10 +365,11 @@ def search_commercial_projects():
 
 @app.route("/search_residential_projects", methods=["GET"])
 def search_residential_projects():
-    """Search residential projects by name with pagination"""
+    """Search residential projects by name with pagination and offset"""
     try:
         search_term = request.args.get("q", "").lower().strip()
         limit = min(100, max(1, int(request.args.get("limit", 12))))
+        offset = max(0, int(request.args.get("offset", 0)))
         
         if not search_term:
             return jsonify({
@@ -368,19 +387,36 @@ def search_residential_projects():
         matching_projects = [PROJECTS_CACHE[idx] for idx in matching_indices]
         matching_projects.sort(key=lambda x: x['name'].lower())
         
+        # Apply offset and limit
+        start = offset
+        end = offset + limit
+        
+        # Check if offset exceeds total available data
+        if offset >= len(matching_projects):
+            return jsonify({
+                "status": "success",
+                "projects": [],
+                "total": len(matching_projects),
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "message": "Offset exceeds available data"
+            })
+        
         return jsonify({
             "status": "success",
-            "projects": matching_projects[:limit],
+            "projects": matching_projects[start:end],
             "total": len(matching_projects),
             "limit": limit,
-            "has_more": len(matching_projects) > limit
+            "offset": offset,
+            "has_more": end < len(matching_projects)
         })
         
     except ValueError as e:
         logger.error(f"Invalid search parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid parameters"
+            "message": "Invalid parameters for limit or offset"
         }), 400
     except Exception as e:
         logger.error(f"Error in search: {str(e)}")
@@ -393,5 +429,5 @@ if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8086)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8087)))
     
