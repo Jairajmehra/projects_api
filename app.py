@@ -111,6 +111,7 @@ def format_commercial_project(record):
             "totalUnitsAvailable": fields.get("Available Units",""),
             "numberOfTowers": fields.get("Total No Of Towers",""),
             "planPassingAuthority": fields.get("Plan Passing Authority",""),
+            "Coordinates": fields.get("Coordinates",""),
             
         }
     except Exception as e:
@@ -429,5 +430,5 @@ if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8087)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
     
