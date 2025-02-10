@@ -20,48 +20,75 @@ CORS(app)
 # Load configuration from environment variables
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
 BASE_ID = os.environ.get('BASE_ID')
-TABLE_NAME = os.environ.get('TABLE_NAME')
-COMMERCIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME')
+RESIDENTIAL_TABLE_NAME = os.environ.get('RESIDENTIAL_TABLE_NAME')
+COMMERCIAL_RESIDENTIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME')
 # Validate required environment variables
-if not all([AIRTABLE_API_KEY, BASE_ID, TABLE_NAME, COMMERCIAL_TABLE_NAME]):
+if not all([AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, COMMERCIAL_RESIDENTIAL_TABLE_NAME]):
     logger.error("Missing required environment variables. Please check your app.yaml configuration.")
-    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, TABLE_NAME, or COMMERCIAL_TABLE_NAME")
+    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, or COMMERCIAL_RESIDENTIAL_TABLE_NAME")
 
 # Initialize Airtable
 try:
     api = Api(AIRTABLE_API_KEY)
-    table = api.table(BASE_ID, TABLE_NAME)
-    commercial_table = api.table(BASE_ID, COMMERCIAL_TABLE_NAME)
+    table = api.table(BASE_ID, RESIDENTIAL_TABLE_NAME)
+    commercial_table = api.table(BASE_ID, COMMERCIAL_RESIDENTIAL_TABLE_NAME)
     logger.info("Airtable connection initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Airtable connection: {str(e)}")
     raise
 
 # Global cache for projects
-PROJECTS_CACHE = []
-COMMERCIAL_PROJECTS_CACHE = []
+RESIDENTIAL_RESIDENTIAL_PROJECTS_CACHE = []
+COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = []
 COMMERCIAL_PROJECTS_NAME_INDEX = {}
 RESIDENTIAL_PROJECTS_NAME_INDEX = {}
 
-def format_project(record):
-    """Format a single project record"""
-    try:
+def format_residential_project(record):
+ """Format a single commercial project record"""
+ try:
         fields = record["fields"]
         brochure_url = ""
-        if "Brochure" in fields and fields["Brochure"]:
-            brochure_url = fields["Brochure"][0].get("url", "")
+        cover_photo_url = ""
+        certificate_url = ""
+        
+        if "Brochure Storage URL" in fields and fields["Brochure Storage URL"]:
+            brochure_url = fields["Brochure Storage URL"]
+
+        if "Cover Photo Storage URL" in fields and fields["Cover Photo Storage URL"]:
+            cover_photo_url = fields["Cover Photo Storage URL"]
+
+        if "Certificate Storage URL" in fields and fields["Certificate Storage URL"]:
+            certificate_url = fields["Certificate Storage URL"]
 
         return {
             "rera": fields.get("RERA Number", ""),
             "name": fields.get("Project Name", ""),
-            "locality": fields.get("District", ""),
-            "propertyType": fields.get("Type", ""),
-            "unitSizes": fields.get("Average Carpet Area of Units (Sq Mtrs)", ""),
             "brochureLink": brochure_url,
-            "bhk": "3 BHK"
+            "coverPhotoLink": cover_photo_url,
+            "certificateLink": certificate_url,
+            "promoterName": fields.get("Promoter Name", ""),
+            "mobile": fields.get("Mobile", ""),
+            "projectType": fields.get("Project Type", ""),
+            "startDate": fields.get("Project Start Date", ""),
+            "endDate": fields.get("Project End Date", ""),
+            "projectLandArea": fields.get("Land Area (Sqyrds)",""),
+            "projectAddress": fields.get("Project Address",""),
+            "projectStatus": fields.get("Project Status",""),
+            "totalUnits": fields.get("Total Units",""),
+            "totalUnitsAvailable": fields.get("Available Units",""),
+            "numberOfTowers": fields.get("Total No Of Towers",""),
+            "planPassingAuthority": fields.get("Plan Passing Authority",""),
+            "coordinates": fields.get("coordinates",""),
+            "photos": fields.get("Photos",""),
+            "price": fields.get("Price",""),
+            "bhk": fields.get("BHK",""),
+            "planPassingAuthority": fields.get("Plan Passing Authority",""),
+            "localityNames": fields.get("Name (from Locality)",""),
+            "configuration": fields.get("Configuration",""),
         }
-    except Exception as e:
-        logger.error(f"Error formatting project record: {str(e)}")
+ except Exception as e:
+        logger.error(f"Error formatting commercial project record: {str(e)}")
+        logger.error(f"Record that caused error: {record}")
         return None
 
 def format_commercial_project(record):
@@ -124,7 +151,7 @@ def build_commercial_projects_index():
     global COMMERCIAL_PROJECTS_NAME_INDEX
     COMMERCIAL_PROJECTS_NAME_INDEX = {}
     
-    for idx, project in enumerate(COMMERCIAL_PROJECTS_CACHE):
+    for idx, project in enumerate(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE):
         if project and project.get('name'):
             # Create normalized key for case-insensitive search
             name_key = project['name'].lower()
@@ -137,7 +164,7 @@ def build_residential_projects_index():
     global RESIDENTIAL_PROJECTS_NAME_INDEX
     RESIDENTIAL_PROJECTS_NAME_INDEX = {}
     
-    for idx, project in enumerate(PROJECTS_CACHE):
+    for idx, project in enumerate(RESIDENTIAL_PROJECTS_CACHE):
         if project and project.get('name'):
             # Create normalized key for case-insensitive search
             name_key = project['name'].lower()
@@ -147,27 +174,27 @@ def build_residential_projects_index():
 
 def init_cache():
     """Initialize the cache without using Flask context"""
-    global PROJECTS_CACHE
-    global COMMERCIAL_PROJECTS_CACHE
+    global RESIDENTIAL_PROJECTS_CACHE
+    global COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE
     try:
-        records = table.all()
+        records = table.all(view="Production")
         commercial_records = commercial_table.all()
-        PROJECTS_CACHE = [format_project(record) for record in records]
-        COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
+        RESIDENTIAL_PROJECTS_CACHE = [format_residential_project(record) for record in records]
+        COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
         build_commercial_projects_index()
         build_residential_projects_index()
-        print(f"Cache initialized successfully with {len(PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_PROJECTS_CACHE)} commercial projects")
+        print(f"Cache initialized successfully with {len(RESIDENTIAL_PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE)} commercial projects")
     except Exception as e:
         logger.error(f"Error initializing cache: {str(e)}")
-        PROJECTS_CACHE = []
-        COMMERCIAL_PROJECTS_CACHE = []
+        RESIDENTIAL_PROJECTS_CACHE = []
+        COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = []
 
 @app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         "status": "healthy",
-        "cache_size": len(PROJECTS_CACHE)
+        "cache_size": len(RESIDENTIAL_PROJECTS_CACHE)
     })
 
 @app.route("/update_cache", methods=["GET"])
@@ -178,7 +205,7 @@ def update_cache():
         return jsonify({
             "status": "success",
             "message": "Cache updated successfully",
-            "total_projects": len(PROJECTS_CACHE)
+            "total_projects": len(RESIDENTIAL_PROJECTS_CACHE)
         })
     except Exception as e:
         logger.error(f"Cache update failed: {str(e)}")
@@ -192,7 +219,7 @@ def get_commercial_projects():
     """Get paginated commercial projects from cache with offset"""
     try:
         # If cache is empty, initialize it
-        if not COMMERCIAL_PROJECTS_CACHE:
+        if not COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE:
             init_cache()
             
         page = max(1, int(request.args.get("page", 1)))
@@ -204,11 +231,11 @@ def get_commercial_projects():
         end = start + limit
         
         # Ensure we don't exceed array bounds
-        if start >= len(COMMERCIAL_PROJECTS_CACHE):
+        if start >= len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE):
             return jsonify({
                 "status": "success",
                 "projects": [],
-                "total": len(COMMERCIAL_PROJECTS_CACHE),
+                "total": len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
                 "offset": offset,
@@ -218,12 +245,12 @@ def get_commercial_projects():
         
         return jsonify({
             "status": "success",
-            "projects": COMMERCIAL_PROJECTS_CACHE[start:end],
-            "total": len(COMMERCIAL_PROJECTS_CACHE),
+            "projects": COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE[start:end],
+            "total": len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE),
             "page": page,
             "limit": limit,
             "offset": offset,
-            "has_more": end < len(COMMERCIAL_PROJECTS_CACHE)
+            "has_more": end < len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE)
         })
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {str(e)}")
@@ -243,7 +270,7 @@ def get_projects():
     """Get paginated projects from cache with offset"""
     try:
         # If cache is empty, initialize it
-        if not PROJECTS_CACHE:
+        if not RESIDENTIAL_PROJECTS_CACHE:
             init_cache()
             
         page = max(1, int(request.args.get("page", 1)))
@@ -255,11 +282,11 @@ def get_projects():
         end = start + limit
         
         # Check if offset exceeds total available data
-        if offset >= len(PROJECTS_CACHE):
+        if offset >= len(RESIDENTIAL_PROJECTS_CACHE):
             return jsonify({
                 "status": "success",
                 "projects": [],
-                "total": len(PROJECTS_CACHE),
+                "total": len(RESIDENTIAL_PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
                 "offset": offset,
@@ -268,11 +295,11 @@ def get_projects():
             })
         
         # Ensure we don't exceed array bounds
-        if start >= len(PROJECTS_CACHE):
+        if start >= len(RESIDENTIAL_PROJECTS_CACHE):
             return jsonify({
                 "status": "success",
                 "projects": [],
-                "total": len(PROJECTS_CACHE),
+                "total": len(RESIDENTIAL_PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
                 "offset": offset,
@@ -282,12 +309,12 @@ def get_projects():
         
         return jsonify({
             "status": "success",
-            "projects": PROJECTS_CACHE[start:end],
-            "total": len(PROJECTS_CACHE),
+            "projects": RESIDENTIAL_PROJECTS_CACHE[start:end],
+            "total": len(RESIDENTIAL_PROJECTS_CACHE),
             "page": page,
             "limit": limit,
             "offset": offset,
-            "has_more": end < len(PROJECTS_CACHE)
+            "has_more": end < len(RESIDENTIAL_PROJECTS_CACHE)
         })
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {str(e)}")
@@ -323,7 +350,7 @@ def search_commercial_projects():
                 matching_indices.update(COMMERCIAL_PROJECTS_NAME_INDEX[name_key])
         
         # Convert to list and sort
-        matching_projects = [COMMERCIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
+        matching_projects = [COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
         matching_projects.sort(key=lambda x: x['name'].lower())
         
         # Apply offset and limit
@@ -385,7 +412,7 @@ def search_residential_projects():
                 matching_indices.update(RESIDENTIAL_PROJECTS_NAME_INDEX[name_key])
         
         # Convert to list and sort
-        matching_projects = [PROJECTS_CACHE[idx] for idx in matching_indices]
+        matching_projects = [RESIDENTIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
         matching_projects.sort(key=lambda x: x['name'].lower())
         
         # Apply offset and limit
@@ -430,5 +457,5 @@ if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8083)))
     

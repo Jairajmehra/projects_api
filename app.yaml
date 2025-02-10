@@ -12,5 +12,5 @@ automatic_scaling:
 env_variables:
   AIRTABLE_API_KEY: "pat58wdyhkYY9AaF9.c1ec6de961cb307900f1bfb3d274f69814b1942cec3055650d96190319d432a6"
   BASE_ID: "appr3XO1WxxZjPCJg"
-  TABLE_NAME: "Residential"
+  RESIDENTIAL_TABLE_NAME: "Residential"
   COMMERCIAL_TABLE_NAME: "Commercial"
