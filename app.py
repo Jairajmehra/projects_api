@@ -223,7 +223,7 @@ def get_commercial_projects():
             init_cache()
             
         page = max(1, int(request.args.get("page", 1)))
-        limit = min(50, max(1, int(request.args.get("limit", 12))))
+        limit = min(500, max(1, int(request.args.get("limit", 12))))
         offset = max(0, int(request.args.get("offset", 0)))
         
         # Calculate start and end indices with offset
@@ -457,5 +457,5 @@ if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8083)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
     
