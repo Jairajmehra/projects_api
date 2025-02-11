@@ -38,10 +38,70 @@ except Exception as e:
     raise
 
 # Global cache for projects
-RESIDENTIAL_RESIDENTIAL_PROJECTS_CACHE = []
-COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = []
+RESIDENTIAL_PROJECTS_CACHE = []
+COMMERCIAL_PROJECTS_CACHE = []
 COMMERCIAL_PROJECTS_NAME_INDEX = {}
 RESIDENTIAL_PROJECTS_NAME_INDEX = {}
+
+class ViewportParams:
+    """Class to handle viewport parameters validation and parsing"""
+    def __init__(self, min_lat: float, max_lat: float, min_lng: float, max_lng: float):
+        if not all(isinstance(x, (int, float)) for x in [min_lat, max_lat, min_lng, max_lng]):
+            raise ValueError("All viewport parameters must be numeric")
+        if min_lat > max_lat or min_lng > max_lng:
+            raise ValueError("Min values cannot be greater than max values")
+        if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
+            raise ValueError("Latitude must be between -90 and 90 degrees")
+        if not (-180 <= min_lng <= 180 and -180 <= max_lng <= 180):
+            raise ValueError("Longitude must be between -180 and 180 degrees")
+            
+        self.min_lat = min_lat
+        self.max_lat = max_lat
+        self.min_lng = min_lng
+        self.max_lng = max_lng
+
+class ProjectCoordinates:
+    """Class to handle project coordinate parsing and validation"""
+    def __init__(self, coord_str: str):
+        if not coord_str or not isinstance(coord_str, str):
+            raise ValueError("Invalid coordinates string")
+            
+        try:
+            lat_str, lng_str = coord_str.split(",")
+            self.lat = float(lat_str.strip())
+            self.lng = float(lng_str.strip())
+            
+            if not (-90 <= self.lat <= 90):
+                raise ValueError("Latitude must be between -90 and 90 degrees")
+            if not (-180 <= self.lng <= 180):
+                raise ValueError("Longitude must be between -180 and 180 degrees")
+        except Exception as e:
+            raise ValueError(f"Failed to parse coordinates: {str(e)}")
+
+def is_point_in_viewport(coords: ProjectCoordinates, viewport: ViewportParams) -> bool:
+    """Check if a point falls within the viewport"""
+    return (viewport.min_lat <= coords.lat <= viewport.max_lat and 
+            viewport.min_lng <= coords.lng <= viewport.max_lng)
+
+def filter_projects_by_viewport(projects: list, viewport: ViewportParams) -> list:
+    """Filter projects based on viewport boundaries"""
+    filtered_projects = []
+    
+    for project in projects:
+        try:
+            # Try both coordinate field names
+            coord_str = project.get("coordinates", "") or project.get("Coordinates", "")
+            if not coord_str:
+                continue
+                
+            coords = ProjectCoordinates(coord_str)
+            if is_point_in_viewport(coords, viewport):
+                filtered_projects.append(project)
+        except ValueError:
+            # Skip projects with invalid coordinates
+            continue
+            
+    return filtered_projects
 
 def format_residential_project(record):
  """Format a single commercial project record"""
@@ -151,7 +211,7 @@ def build_commercial_projects_index():
     global COMMERCIAL_PROJECTS_NAME_INDEX
     COMMERCIAL_PROJECTS_NAME_INDEX = {}
     
-    for idx, project in enumerate(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE):
+    for idx, project in enumerate(COMMERCIAL_PROJECTS_CACHE):
         if project and project.get('name'):
             # Create normalized key for case-insensitive search
             name_key = project['name'].lower()
@@ -175,19 +235,19 @@ def build_residential_projects_index():
 def init_cache():
     """Initialize the cache without using Flask context"""
     global RESIDENTIAL_PROJECTS_CACHE
-    global COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE
+    global COMMERCIAL_PROJECTS_CACHE
     try:
         records = table.all(view="Production")
         commercial_records = commercial_table.all()
         RESIDENTIAL_PROJECTS_CACHE = [format_residential_project(record) for record in records]
-        COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
+        COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
         build_commercial_projects_index()
         build_residential_projects_index()
-        print(f"Cache initialized successfully with {len(RESIDENTIAL_PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE)} commercial projects")
+        print(f"Cache initialized successfully with {len(RESIDENTIAL_PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_PROJECTS_CACHE)} commercial projects")
     except Exception as e:
         logger.error(f"Error initializing cache: {str(e)}")
         RESIDENTIAL_PROJECTS_CACHE = []
-        COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE = []
+        COMMERCIAL_PROJECTS_CACHE = []
 
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -219,7 +279,7 @@ def get_commercial_projects():
     """Get paginated commercial projects from cache with offset"""
     try:
         # If cache is empty, initialize it
-        if not COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE:
+        if not COMMERCIAL_PROJECTS_CACHE:
             init_cache()
             
         page = max(1, int(request.args.get("page", 1)))
@@ -231,11 +291,11 @@ def get_commercial_projects():
         end = start + limit
         
         # Ensure we don't exceed array bounds
-        if start >= len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE):
+        if start >= len(COMMERCIAL_PROJECTS_CACHE):
             return jsonify({
                 "status": "success",
                 "projects": [],
-                "total": len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE),
+                "total": len(COMMERCIAL_PROJECTS_CACHE),
                 "page": page,
                 "limit": limit,
                 "offset": offset,
@@ -245,12 +305,12 @@ def get_commercial_projects():
         
         return jsonify({
             "status": "success",
-            "projects": COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE[start:end],
-            "total": len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE),
+            "projects": COMMERCIAL_PROJECTS_CACHE[start:end],
+            "total": len(COMMERCIAL_PROJECTS_CACHE),
             "page": page,
             "limit": limit,
             "offset": offset,
-            "has_more": end < len(COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE)
+            "has_more": end < len(COMMERCIAL_PROJECTS_CACHE)
         })
     except ValueError as e:
         logger.error(f"Invalid pagination parameters: {str(e)}")
@@ -274,7 +334,7 @@ def get_projects():
             init_cache()
             
         page = max(1, int(request.args.get("page", 1)))
-        limit = min(50, max(1, int(request.args.get("limit", 12))))
+        limit = min(500, max(1, int(request.args.get("limit", 12))))
         offset = max(0, int(request.args.get("offset", 0)))
         
         # Calculate start and end indices with offset
@@ -350,7 +410,7 @@ def search_commercial_projects():
                 matching_indices.update(COMMERCIAL_PROJECTS_NAME_INDEX[name_key])
         
         # Convert to list and sort
-        matching_projects = [COMMERCIAL_RESIDENTIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
+        matching_projects = [COMMERCIAL_PROJECTS_CACHE[idx] for idx in matching_indices]
         matching_projects.sort(key=lambda x: x['name'].lower())
         
         # Apply offset and limit
@@ -453,9 +513,167 @@ def search_residential_projects():
             "message": "Internal server error"
         }), 500
 
+def get_projects_in_viewport(projects_cache: list, viewport_params: dict, pagination_params: dict):
+    """
+    Reusable function to get projects within a viewport with pagination
+    
+    Args:
+        projects_cache: List of projects to filter
+        viewport_params: Dict containing minLat, maxLat, minLng, maxLng
+        pagination_params: Dict containing page, limit, offset
+    
+    Returns:
+        Dict containing filtered and paginated results with metadata
+    """
+    try:
+        # Parse and validate viewport parameters
+        viewport = ViewportParams(
+            min_lat=float(viewport_params.get("minLat", 0)),
+            max_lat=float(viewport_params.get("maxLat", 0)),
+            min_lng=float(viewport_params.get("minLng", 0)),
+            max_lng=float(viewport_params.get("maxLng", 0))
+        )
+    except ValueError as e:
+        raise ValueError(f"Invalid viewport parameters: {str(e)}")
+
+    # Filter projects by viewport
+    in_viewport_projects = filter_projects_by_viewport(projects_cache, viewport)
+    
+    # Parse pagination parameters
+    page = max(1, int(pagination_params.get("page", 1)))
+    limit = min(500, max(1, int(pagination_params.get("limit", 12))))
+    offset = max(0, int(pagination_params.get("offset", 0)))
+    
+    # Apply pagination
+    start = ((page - 1) * limit) + offset
+    end = start + limit
+    
+    # Prepare response
+    response = {
+        "status": "success",
+        "total": len(in_viewport_projects),
+        "page": page,
+        "limit": limit,
+        "offset": offset,
+        "viewport": {
+            "minLat": viewport.min_lat,
+            "maxLat": viewport.max_lat,
+            "minLng": viewport.min_lng,
+            "maxLng": viewport.max_lng
+        }
+    }
+    
+    # Handle pagination overflow
+    if start >= len(in_viewport_projects):
+        response.update({
+            "projects": [],
+            "has_more": False,
+            "message": "Page number exceeds available data for this viewport"
+        })
+    else:
+        response.update({
+            "projects": in_viewport_projects[start:end],
+            "has_more": end < len(in_viewport_projects)
+        })
+    
+    return response
+
+@app.route("/commercial_projects_viewport", methods=["GET"])
+def get_commercial_projects_viewport():
+    """
+    Get commercial projects within the specified viewport with pagination.
+    Query params: minLat, maxLat, minLng, maxLng, page, limit, offset
+    """
+    try:
+        # If cache is empty, initialize it
+        if not COMMERCIAL_PROJECTS_CACHE:
+            init_cache()
+        
+        # Get viewport and pagination parameters from request
+        viewport_params = {
+            "minLat": request.args.get("minLat", 0),
+            "maxLat": request.args.get("maxLat", 0),
+            "minLng": request.args.get("minLng", 0),
+            "maxLng": request.args.get("maxLng", 0)
+        }
+        
+        pagination_params = {
+            "page": request.args.get("page", 1),
+            "limit": request.args.get("limit", 12),
+            "offset": request.args.get("offset", 0)
+        }
+        
+        # Use the reusable function
+        result = get_projects_in_viewport(
+            COMMERCIAL_PROJECTS_CACHE,
+            viewport_params,
+            pagination_params
+        )
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.error(str(e))
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"Error in viewport filtering: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
+@app.route("/residential_projects_viewport", methods=["GET"])
+def get_residential_projects_viewport():
+    """
+    Get residential projects within the specified viewport with pagination.
+    Query params: minLat, maxLat, minLng, maxLng, page, limit, offset
+    """
+    try:
+        # If cache is empty, initialize it
+        if not RESIDENTIAL_PROJECTS_CACHE:
+            init_cache()
+        
+        # Get viewport and pagination parameters from request
+        viewport_params = {
+            "minLat": request.args.get("minLat", 0),
+            "maxLat": request.args.get("maxLat", 0),
+            "minLng": request.args.get("minLng", 0),
+            "maxLng": request.args.get("maxLng", 0)
+        }
+        
+        pagination_params = {
+            "page": request.args.get("page", 1),
+            "limit": request.args.get("limit", 12),
+            "offset": request.args.get("offset", 0)
+        }
+        
+        # Use the reusable function
+        result = get_projects_in_viewport(
+            RESIDENTIAL_PROJECTS_CACHE,
+            viewport_params,
+            pagination_params
+        )
+        
+        return jsonify(result)
+        
+    except ValueError as e:
+        logger.error(str(e))
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"Error in viewport filtering: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
 if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8085)))
     
