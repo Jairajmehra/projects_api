@@ -240,6 +240,7 @@ def init_cache():
         records = table.all(view="Production")
         commercial_records = commercial_table.all()
         RESIDENTIAL_PROJECTS_CACHE = [format_residential_project(record) for record in records]
+        print(RESIDENTIAL_PROJECTS_CACHE[0])
         COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
         build_commercial_projects_index()
         build_residential_projects_index()
@@ -276,47 +277,77 @@ def update_cache():
 
 @app.route("/commercial_projects", methods=["GET"])
 def get_commercial_projects():
-    """Get paginated commercial projects from cache with offset"""
+    """
+    Get commercial projects with optional viewport filtering and pagination.
+    
+    Query params:
+    - Regular pagination: limit, offset
+    - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
+    """
     try:
         # If cache is empty, initialize it
         if not COMMERCIAL_PROJECTS_CACHE:
             init_cache()
             
-        page = max(1, int(request.args.get("page", 1)))
+        # Parse pagination parameters
         limit = min(500, max(1, int(request.args.get("limit", 12))))
         offset = max(0, int(request.args.get("offset", 0)))
         
-        # Calculate start and end indices with offset
-        start = ((page - 1) * limit) + offset
-        end = start + limit
+        # Check if viewport parameters are provided
+        has_viewport = all(request.args.get(param) for param in ["minLat", "maxLat", "minLng", "maxLng"])
         
-        # Ensure we don't exceed array bounds
-        if start >= len(COMMERCIAL_PROJECTS_CACHE):
+        if has_viewport:
+            # Use viewport filtering
+            viewport_params = {
+                "minLat": request.args.get("minLat"),
+                "maxLat": request.args.get("maxLat"),
+                "minLng": request.args.get("minLng"),
+                "maxLng": request.args.get("maxLng")
+            }
+            
+            pagination_params = {
+                "page": 1,  # Always use page 1 since we're using offset
+                "limit": limit,
+                "offset": offset
+            }
+            
+            result = get_projects_in_viewport(
+                COMMERCIAL_PROJECTS_CACHE,
+                viewport_params,
+                pagination_params
+            )
+            return jsonify(result)
+        else:
+            # Regular pagination without viewport
+            start = offset
+            end = offset + limit
+            
+            # Check if offset exceeds total available data
+            if offset >= len(COMMERCIAL_PROJECTS_CACHE):
+                return jsonify({
+                    "status": "success",
+                    "projects": [],
+                    "total": len(COMMERCIAL_PROJECTS_CACHE),
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": False,
+                    "message": "Offset exceeds available data"
+                })
+            
             return jsonify({
                 "status": "success",
-                "projects": [],
+                "projects": COMMERCIAL_PROJECTS_CACHE[start:end],
                 "total": len(COMMERCIAL_PROJECTS_CACHE),
-                "page": page,
                 "limit": limit,
                 "offset": offset,
-                "has_more": False,
-                "message": "Page number exceeds available data"
+                "has_more": end < len(COMMERCIAL_PROJECTS_CACHE)
             })
-        
-        return jsonify({
-            "status": "success",
-            "projects": COMMERCIAL_PROJECTS_CACHE[start:end],
-            "total": len(COMMERCIAL_PROJECTS_CACHE),
-            "page": page,
-            "limit": limit,
-            "offset": offset,
-            "has_more": end < len(COMMERCIAL_PROJECTS_CACHE)
-        })
+            
     except ValueError as e:
-        logger.error(f"Invalid pagination parameters: {str(e)}")
+        logger.error(f"Invalid parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid page, limit, or offset parameter"
+            "message": str(e)
         }), 400
     except Exception as e:
         logger.error(f"Error fetching commercial projects: {str(e)}")
@@ -324,66 +355,83 @@ def get_commercial_projects():
             "status": "error",
             "message": "Internal server error"
         }), 500
+
+@app.route("/residential_projects", methods=["GET"])
+def get_residential_projects():
+    """
+    Get residential projects with optional viewport filtering and pagination.
     
-@app.route("/projects", methods=["GET"])
-def get_projects():
-    """Get paginated projects from cache with offset"""
+    Query params:
+    - Regular pagination: limit, offset
+    - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
+    """
     try:
         # If cache is empty, initialize it
         if not RESIDENTIAL_PROJECTS_CACHE:
             init_cache()
             
-        page = max(1, int(request.args.get("page", 1)))
+        # Parse pagination parameters
         limit = min(500, max(1, int(request.args.get("limit", 12))))
         offset = max(0, int(request.args.get("offset", 0)))
         
-        # Calculate start and end indices with offset
-        start = ((page - 1) * limit) + offset
-        end = start + limit
+        # Check if viewport parameters are provided
+        has_viewport = all(request.args.get(param) for param in ["minLat", "maxLat", "minLng", "maxLng"])
         
-        # Check if offset exceeds total available data
-        if offset >= len(RESIDENTIAL_PROJECTS_CACHE):
+        if has_viewport:
+            # Use viewport filtering
+            viewport_params = {
+                "minLat": request.args.get("minLat"),
+                "maxLat": request.args.get("maxLat"),
+                "minLng": request.args.get("minLng"),
+                "maxLng": request.args.get("maxLng")
+            }
+            
+            pagination_params = {
+                "page": 1,  # Always use page 1 since we're using offset
+                "limit": limit,
+                "offset": offset
+            }
+            
+            result = get_projects_in_viewport(
+                RESIDENTIAL_PROJECTS_CACHE,
+                viewport_params,
+                pagination_params
+            )
+            return jsonify(result)
+        else:
+            # Regular pagination without viewport
+            start = offset
+            end = offset + limit
+            
+            # Check if offset exceeds total available data
+            if offset >= len(RESIDENTIAL_PROJECTS_CACHE):
+                return jsonify({
+                    "status": "success",
+                    "projects": [],
+                    "total": len(RESIDENTIAL_PROJECTS_CACHE),
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": False,
+                    "message": "Offset exceeds available data"
+                })
+            
             return jsonify({
                 "status": "success",
-                "projects": [],
+                "projects": RESIDENTIAL_PROJECTS_CACHE[start:end],
                 "total": len(RESIDENTIAL_PROJECTS_CACHE),
-                "page": page,
                 "limit": limit,
                 "offset": offset,
-                "has_more": False,
-                "message": "Offset exceeds available data"
+                "has_more": end < len(RESIDENTIAL_PROJECTS_CACHE)
             })
-        
-        # Ensure we don't exceed array bounds
-        if start >= len(RESIDENTIAL_PROJECTS_CACHE):
-            return jsonify({
-                "status": "success",
-                "projects": [],
-                "total": len(RESIDENTIAL_PROJECTS_CACHE),
-                "page": page,
-                "limit": limit,
-                "offset": offset,
-                "has_more": False,
-                "message": "Page number exceeds available data"
-            })
-        
-        return jsonify({
-            "status": "success",
-            "projects": RESIDENTIAL_PROJECTS_CACHE[start:end],
-            "total": len(RESIDENTIAL_PROJECTS_CACHE),
-            "page": page,
-            "limit": limit,
-            "offset": offset,
-            "has_more": end < len(RESIDENTIAL_PROJECTS_CACHE)
-        })
+            
     except ValueError as e:
-        logger.error(f"Invalid pagination parameters: {str(e)}")
+        logger.error(f"Invalid parameters: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": "Invalid page, limit, or offset parameter"
+            "message": str(e)
         }), 400
     except Exception as e:
-        logger.error(f"Error fetching projects: {str(e)}")
+        logger.error(f"Error fetching residential projects: {str(e)}")
         return jsonify({
             "status": "error",
             "message": "Internal server error"
@@ -578,102 +626,9 @@ def get_projects_in_viewport(projects_cache: list, viewport_params: dict, pagina
     
     return response
 
-@app.route("/commercial_projects_viewport", methods=["GET"])
-def get_commercial_projects_viewport():
-    """
-    Get commercial projects within the specified viewport with pagination.
-    Query params: minLat, maxLat, minLng, maxLng, page, limit, offset
-    """
-    try:
-        # If cache is empty, initialize it
-        if not COMMERCIAL_PROJECTS_CACHE:
-            init_cache()
-        
-        # Get viewport and pagination parameters from request
-        viewport_params = {
-            "minLat": request.args.get("minLat", 0),
-            "maxLat": request.args.get("maxLat", 0),
-            "minLng": request.args.get("minLng", 0),
-            "maxLng": request.args.get("maxLng", 0)
-        }
-        
-        pagination_params = {
-            "page": request.args.get("page", 1),
-            "limit": request.args.get("limit", 12),
-            "offset": request.args.get("offset", 0)
-        }
-        
-        # Use the reusable function
-        result = get_projects_in_viewport(
-            COMMERCIAL_PROJECTS_CACHE,
-            viewport_params,
-            pagination_params
-        )
-        return jsonify(result)
-        
-    except ValueError as e:
-        logger.error(str(e))
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
-    except Exception as e:
-        logger.error(f"Error in viewport filtering: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": "Internal server error"
-        }), 500
-
-@app.route("/residential_projects_viewport", methods=["GET"])
-def get_residential_projects_viewport():
-    """
-    Get residential projects within the specified viewport with pagination.
-    Query params: minLat, maxLat, minLng, maxLng, page, limit, offset
-    """
-    try:
-        # If cache is empty, initialize it
-        if not RESIDENTIAL_PROJECTS_CACHE:
-            init_cache()
-        
-        # Get viewport and pagination parameters from request
-        viewport_params = {
-            "minLat": request.args.get("minLat", 0),
-            "maxLat": request.args.get("maxLat", 0),
-            "minLng": request.args.get("minLng", 0),
-            "maxLng": request.args.get("maxLng", 0)
-        }
-        
-        pagination_params = {
-            "page": request.args.get("page", 1),
-            "limit": request.args.get("limit", 12),
-            "offset": request.args.get("offset", 0)
-        }
-        
-        # Use the reusable function
-        result = get_projects_in_viewport(
-            RESIDENTIAL_PROJECTS_CACHE,
-            viewport_params,
-            pagination_params
-        )
-        
-        return jsonify(result)
-        
-    except ValueError as e:
-        logger.error(str(e))
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
-    except Exception as e:
-        logger.error(f"Error in viewport filtering: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": "Internal server error"
-        }), 500
-
 if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8085)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
     
