@@ -120,6 +120,9 @@ def format_residential_project(record):
         if "Certificate Storage URL" in fields and fields["Certificate Storage URL"]:
             certificate_url = fields["Certificate Storage URL"]
 
+        if fields.get("Photos"):
+            cover_photo_url = fields.get("Photos").split(",")[0]
+
         return {
             "rera": fields.get("RERA Number", ""),
             "name": fields.get("Project Name", ""),
@@ -290,7 +293,8 @@ def get_commercial_projects():
             init_cache()
             
         # Parse pagination parameters
-        limit = min(500, max(1, int(request.args.get("limit", 12))))
+        #limit = min(500, max(1, int(request.args.get("limit", 12))))
+        limit = max(1, int(request.args.get("limit", 12)))
         offset = max(0, int(request.args.get("offset", 0)))
         
         # Check if viewport parameters are provided
@@ -371,7 +375,8 @@ def get_residential_projects():
             init_cache()
             
         # Parse pagination parameters
-        limit = min(500, max(1, int(request.args.get("limit", 12))))
+        #limit = min(500, max(1, int(request.args.get("limit", 12))))
+        limit = max(1, int(request.args.get("limit", 12)))
         offset = max(0, int(request.args.get("offset", 0)))
         
         # Check if viewport parameters are provided
