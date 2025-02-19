@@ -4,7 +4,8 @@ from pyairtable import Api
 import os
 from dotenv import load_dotenv
 import logging
-
+from utils import match_project_names_to_properties
+import time
 # Load environment variables from .env file
 load_dotenv()
 
@@ -20,18 +21,21 @@ CORS(app)
 # Load configuration from environment variables
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
 BASE_ID = os.environ.get('BASE_ID')
-RESIDENTIAL_TABLE_NAME = os.environ.get('RESIDENTIAL_TABLE_NAME')
-COMMERCIAL_RESIDENTIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME')
+RESIDENTIAL_TABLE_NAME = os.environ.get('RESIDENTIAL_TABLE_NAME') # projects_residential
+COMMERCIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME') # projects_commercial
+INVENTORY_BASE_ID = os.environ.get('INVENTORY_BASE_ID')
+RESIDENTIAL_PROPERTIES_TABLE_ID = os.environ.get('RESIDENTIAL_RENT_PROPERTIES_TABLE_ID') # residential_inventory
 # Validate required environment variables
-if not all([AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, COMMERCIAL_RESIDENTIAL_TABLE_NAME]):
+if not all([AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, COMMERCIAL_TABLE_NAME]):
     logger.error("Missing required environment variables. Please check your app.yaml configuration.")
-    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, or COMMERCIAL_RESIDENTIAL_TABLE_NAME")
+    raise ValueError("Missing required environment variables: AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, or COMMERCIAL_TABLE_NAME")
 
 # Initialize Airtable
 try:
     api = Api(AIRTABLE_API_KEY)
-    table = api.table(BASE_ID, RESIDENTIAL_TABLE_NAME)
-    commercial_table = api.table(BASE_ID, COMMERCIAL_RESIDENTIAL_TABLE_NAME)
+    projects_residential_table = api.table(INVENTORY_BASE_ID, "residential projects")
+    projects_commercial_table = api.table(BASE_ID, COMMERCIAL_TABLE_NAME)
+    residential_inventory_table = api.table(INVENTORY_BASE_ID, RESIDENTIAL_PROPERTIES_TABLE_ID)
     logger.info("Airtable connection initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Airtable connection: {str(e)}")
@@ -40,6 +44,7 @@ except Exception as e:
 # Global cache for projects
 RESIDENTIAL_PROJECTS_CACHE = []
 COMMERCIAL_PROJECTS_CACHE = []
+RESIDENTIAL_PROPERTIES_CACHE = []
 COMMERCIAL_PROJECTS_NAME_INDEX = {}
 RESIDENTIAL_PROJECTS_NAME_INDEX = {}
 
@@ -148,9 +153,35 @@ def format_residential_project(record):
             "planPassingAuthority": fields.get("Plan Passing Authority",""),
             "localityNames": fields.get("Name (from Locality)",""),
             "configuration": fields.get("Configuration",""),
+            "airtable_id": record["id"]
         }
  except Exception as e:
         logger.error(f"Error formatting commercial project record: {str(e)}")
+        logger.error(f"Record that caused error: {record}")
+        return None
+ 
+def format_residential_property(record):
+    """Format a single residential property record"""
+    try:
+        fields = record["fields"]
+        return {
+            "name": fields.get("Property Name", ""),
+            "price": fields.get("Price", ""),
+            "transactionType": fields.get("Transaction Type", ""),
+            "locality": fields.get("Name (from Localities)", ""),
+            "photos": fields.get("Photos", ""),
+            "size": fields.get("Size in Sqfts", ""),
+            "property_type": fields.get("Property Type", ""),
+            "coordinates": fields.get("Property Coordinates", ""),
+            "landmark": fields.get("Landmark", ""),
+            "condition": fields.get("Condition", ""),
+            "date": fields.get("Date", ""),
+            "bhk": fields.get("BHK", ""),
+            "airtable_id": record["id"],
+            "linked_project_rera": fields.get("RERA Number (from residential projects)", "")
+        }
+    except Exception as e:
+        logger.error(f"Error formatting residential property record: {str(e)}")
         logger.error(f"Record that caused error: {record}")
         return None
 
@@ -239,15 +270,27 @@ def init_cache():
     """Initialize the cache without using Flask context"""
     global RESIDENTIAL_PROJECTS_CACHE
     global COMMERCIAL_PROJECTS_CACHE
+    global RESIDENTIAL_PROPERTIES_CACHE
     try:
-        records = table.all(view="Production")
-        commercial_records = commercial_table.all()
+        records = projects_residential_table.all(view="Production")
+        print(f"Residential projects fetched successfully with {len(records)} records")
+        time.sleep(10)
+        commercial_records = projects_commercial_table.all()
+        print(f"Commercial projects fetched successfully with {len(commercial_records)} records")
+        time.sleep(10)
+        residential_inventory_records = residential_inventory_table.all(view="Production")
+        print(f"Residential properties fetched successfully with {len(residential_inventory_records)} records")
+        time.sleep(10)
         RESIDENTIAL_PROJECTS_CACHE = [format_residential_project(record) for record in records]
-        print(RESIDENTIAL_PROJECTS_CACHE[0])
         COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
+        RESIDENTIAL_PROPERTIES_CACHE = [format_residential_property(record) for record in residential_inventory_records]
+        print('-'*100)
+        print(RESIDENTIAL_PROPERTIES_CACHE[0])
+        #match_properties_to_projects(RESIDENTIAL_PROPERTIES_CACHE, 'residential')
+        #match_properties_to_projects(RESIDENTIAL_PROPERTIES_CACHE, 'commercial') to be added later
         build_commercial_projects_index()
         build_residential_projects_index()
-        print(f"Cache initialized successfully with {len(RESIDENTIAL_PROJECTS_CACHE)} residential projects and {len(COMMERCIAL_PROJECTS_CACHE)} commercial projects")
+        print(f"Cache initialized successfully with {len(RESIDENTIAL_PROPERTIES_CACHE)} residential properties")
     except Exception as e:
         logger.error(f"Error initializing cache: {str(e)}")
         RESIDENTIAL_PROJECTS_CACHE = []
@@ -277,6 +320,32 @@ def update_cache():
             "status": "error",
             "message": str(e)
         }), 500
+
+def match_properties_to_projects(properties: list, type: str):
+    """Match properties to projects based on project name similarity"""
+    try:
+        for property in properties:
+            property_name = property.get('name', '').lower() # it should be same for residential and commercial
+            # Find matching projects by name using the utility function
+            if type.lower() == "residential":
+                for project in RESIDENTIAL_PROJECTS_CACHE:
+                    project_name = project.get('name', '').lower()
+                    # Check if names match using the custom function
+                    if match_project_names_to_properties(property_name, project_name):
+                    # If names match, check for exact locality match
+                        residential_inventory_table.update(property.get("airtable_id"), {'residential projects': [project.get("airtable_id")]})
+                        print(f"Updated property {property.get('name')} with project {project.get('name')}")
+
+            elif type.lower() == "commercial":
+                for project in COMMERCIAL_PROJECTS_CACHE:
+                    project_name = project.get('name', '').lower()
+                    if match_project_names_to_properties(property_name, project_name):
+                        # update the property with the commercial project rera number
+                        print(f"Match found for property {property.get('name')} with project {project.get('name')}")
+        
+    except Exception as e:
+        logger.error(f"Error in matching properties to projects: {str(e)}")
+        return []
 
 @app.route("/commercial_projects", methods=["GET"])
 def get_commercial_projects():
@@ -566,6 +635,64 @@ def search_residential_projects():
             "message": "Internal server error"
         }), 500
 
+def get_properties_in_viewport(properties_cache: list, viewport_params: dict, pagination_params: dict):
+    """
+    Reusable function to get properties within a viewport with pagination
+    Similar to get_projects_in_viewport but returns properties instead of projects
+    """
+    try:
+        # Parse and validate viewport parameters
+        viewport = ViewportParams(
+            min_lat=float(viewport_params.get("minLat", 0)),
+            max_lat=float(viewport_params.get("maxLat", 0)),
+            min_lng=float(viewport_params.get("minLng", 0)),
+            max_lng=float(viewport_params.get("maxLng", 0))
+        )
+    except ValueError as e:
+        raise ValueError(f"Invalid viewport parameters: {str(e)}")
+
+    # Filter properties by viewport
+    in_viewport_properties = filter_projects_by_viewport(properties_cache, viewport)
+    
+    # Parse pagination parameters
+    page = max(1, int(pagination_params.get("page", 1)))
+    limit = min(500, max(1, int(pagination_params.get("limit", 12))))
+    offset = max(0, int(pagination_params.get("offset", 0)))
+    
+    # Apply pagination
+    start = ((page - 1) * limit) + offset
+    end = start + limit
+    
+    # Prepare response
+    response = {
+        "status": "success",
+        "total": len(in_viewport_properties),
+        "page": page,
+        "limit": limit,
+        "offset": offset,
+        "viewport": {
+            "minLat": viewport.min_lat,
+            "maxLat": viewport.max_lat,
+            "minLng": viewport.min_lng,
+            "maxLng": viewport.max_lng
+        }
+    }
+    
+    # Handle pagination overflow
+    if start >= len(in_viewport_properties):
+        response.update({
+            "properties": [],  # Changed from "projects" to "properties"
+            "has_more": False,
+            "message": "Page number exceeds available data for this viewport"
+        })
+    else:
+        response.update({
+            "properties": in_viewport_properties[start:end],  # Changed from "projects" to "properties"
+            "has_more": end < len(in_viewport_properties)
+        })
+    
+    return response
+
 def get_projects_in_viewport(projects_cache: list, viewport_params: dict, pagination_params: dict):
     """
     Reusable function to get projects within a viewport with pagination
@@ -631,9 +758,91 @@ def get_projects_in_viewport(projects_cache: list, viewport_params: dict, pagina
     
     return response
 
+@app.route("/residential_properties", methods=["GET"])
+def get_residential_properties():
+    """
+    Get residential properties with optional viewport filtering and pagination.
+    
+    Query params:
+    - Regular pagination: limit, offset
+    - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
+    """
+    try:
+        # If cache is empty, initialize it
+        if not RESIDENTIAL_PROPERTIES_CACHE:
+            print("Residential properties cache is empty, initializing it")
+            init_cache()
+            
+        # Parse pagination parameters
+        limit = max(1, int(request.args.get("limit", 12)))
+        offset = max(0, int(request.args.get("offset", 0)))
+        
+        # Check if viewport parameters are provided
+        has_viewport = all(request.args.get(param) for param in ["minLat", "maxLat", "minLng", "maxLng"])
+        
+        if has_viewport:
+            # Use viewport filtering
+            viewport_params = {
+                "minLat": request.args.get("minLat"),
+                "maxLat": request.args.get("maxLat"),
+                "minLng": request.args.get("minLng"),
+                "maxLng": request.args.get("maxLng")
+            }
+            
+            pagination_params = {
+                "page": 1,  # Always use page 1 since we're using offset
+                "limit": limit,
+                "offset": offset
+            }
+            
+            result = get_properties_in_viewport(
+                RESIDENTIAL_PROPERTIES_CACHE,
+                viewport_params,
+                pagination_params
+            )
+            return jsonify(result)
+        else:
+            # Regular pagination without viewport
+            start = offset
+            end = offset + limit
+            
+            # Check if offset exceeds total available data
+            if offset >= len(RESIDENTIAL_PROPERTIES_CACHE):
+                return jsonify({
+                    "status": "success",
+                    "properties": [],
+                    "total": len(RESIDENTIAL_PROPERTIES_CACHE),
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": False,
+                    "message": "Offset exceeds available data"
+                })
+            
+            return jsonify({
+                "status": "success",
+                "properties": RESIDENTIAL_PROPERTIES_CACHE[start:end],
+                "total": len(RESIDENTIAL_PROPERTIES_CACHE),
+                "limit": limit,
+                "offset": offset,
+                "has_more": end < len(RESIDENTIAL_PROPERTIES_CACHE)
+            })
+            
+    except ValueError as e:
+        logger.error(f"Invalid parameters: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 400
+    except Exception as e:
+        logger.error(f"Error fetching residential properties: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
 if __name__ == "__main__":
     # Initialize cache at startup
     init_cache()
     # Development server
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    app.run(host='0.0.0.0', debug=True, port=int(os.environ.get('PORT', 8091)))
     
