@@ -1,11 +1,13 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from pyairtable import Api
 import os
 from dotenv import load_dotenv
 import logging
-from utils import match_project_names_to_properties
 import time
+from typing import Union
+import threading
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -25,6 +27,7 @@ RESIDENTIAL_TABLE_NAME = os.environ.get('RESIDENTIAL_TABLE_NAME') # projects_res
 COMMERCIAL_TABLE_NAME = os.environ.get('COMMERCIAL_TABLE_NAME') # projects_commercial
 INVENTORY_BASE_ID = os.environ.get('INVENTORY_BASE_ID')
 RESIDENTIAL_PROPERTIES_TABLE_ID = os.environ.get('RESIDENTIAL_RENT_PROPERTIES_TABLE_ID') # residential_inventory
+LOCALITIES_TABLE_ID = os.environ.get('LOCALITIES_TABLE_ID')
 # Validate required environment variables
 if not all([AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, COMMERCIAL_TABLE_NAME]):
     logger.error("Missing required environment variables. Please check your app.yaml configuration.")
@@ -33,6 +36,7 @@ if not all([AIRTABLE_API_KEY, BASE_ID, RESIDENTIAL_TABLE_NAME, COMMERCIAL_TABLE_
 # Initialize Airtable
 try:
     api = Api(AIRTABLE_API_KEY)
+    localities_table = api.table(INVENTORY_BASE_ID, LOCALITIES_TABLE_ID)
     projects_residential_table = api.table(INVENTORY_BASE_ID, "residential projects")
     projects_commercial_table = api.table(BASE_ID, COMMERCIAL_TABLE_NAME)
     residential_inventory_table = api.table(INVENTORY_BASE_ID, RESIDENTIAL_PROPERTIES_TABLE_ID)
@@ -45,8 +49,13 @@ except Exception as e:
 RESIDENTIAL_PROJECTS_CACHE = []
 COMMERCIAL_PROJECTS_CACHE = []
 RESIDENTIAL_PROPERTIES_CACHE = []
+LOCALITIES_CACHE = []
 COMMERCIAL_PROJECTS_NAME_INDEX = {}
 RESIDENTIAL_PROJECTS_NAME_INDEX = {}
+
+# Global flag to track initialization status
+CACHE_INITIALIZATION_STARTED = False
+CACHE_INITIALIZED = False
 
 class ViewportParams:
     """Class to handle viewport parameters validation and parsing"""
@@ -160,18 +169,48 @@ def format_residential_project(record):
         logger.error(f"Record that caused error: {record}")
         return None
  
+def format_locality(record):
+    """Format a single locality record"""
+    try:
+        fields = record["fields"]
+        return {
+            "name": fields.get("Name", ""),
+        }
+    except Exception as e:
+        logger.error(f"Error formatting locality record: {str(e)}")
+        logger.error(f"Record that caused error: {record}")
+        return None
+
+def get_linked_project_photos(rera_number: str):
+    """Get photos from the linked project"""
+    print(f"Searching for linked project with rera number {rera_number}")
+    for project in RESIDENTIAL_PROJECTS_CACHE:
+        if project.get("rera") == rera_number[0]:
+            photos =  project.get("photos", "")
+            print(f"Found linked project {project.get('name')} with photos {photos}")
+            return photos.split(",")
+    return None
+
 def format_residential_property(record):
     """Format a single residential property record"""
     try:
         fields = record["fields"]
+        photos = fields.get("Photos", "")
+        print(f"Residential property Photos: {photos}")
+        linked_project_rera = fields.get("RERA Number (from residential projects)", "")
+        if (not photos or photos == "" or photos == []) and linked_project_rera:
+            project_photos = get_linked_project_photos(linked_project_rera)
+            if project_photos:
+                photos = project_photos[0]
+
         return {
             "name": fields.get("Property Name", ""),
             "price": fields.get("Price", ""),
             "transactionType": fields.get("Transaction Type", ""),
             "locality": fields.get("Name (from Localities)", ""),
-            "photos": fields.get("Photos", ""),
+            "photos": photos,
             "size": fields.get("Size in Sqfts", ""),
-            "property_type": fields.get("Property Type", ""),
+            "propertyType": fields.get("Property Type", ""),
             "coordinates": fields.get("Property Coordinates", ""),
             "landmark": fields.get("Landmark", ""),
             "condition": fields.get("Condition", ""),
@@ -271,81 +310,231 @@ def init_cache():
     global RESIDENTIAL_PROJECTS_CACHE
     global COMMERCIAL_PROJECTS_CACHE
     global RESIDENTIAL_PROPERTIES_CACHE
+    global LOCALITIES_CACHE
+    global CACHE_INITIALIZED
+    
     try:
         records = projects_residential_table.all(view="Production")
         print(f"Residential projects fetched successfully with {len(records)} records")
         time.sleep(10)
         commercial_records = projects_commercial_table.all()
         print(f"Commercial projects fetched successfully with {len(commercial_records)} records")
-        time.sleep(10)
+        time.sleep(11)
         residential_inventory_records = residential_inventory_table.all(view="Production")
         print(f"Residential properties fetched successfully with {len(residential_inventory_records)} records")
-        time.sleep(10)
+        time.sleep(12)
+        localities_records = localities_table.all()
+        print(f"Localities fetched successfully with {len(localities_records)} records")
+        time.sleep(13)
         RESIDENTIAL_PROJECTS_CACHE = [format_residential_project(record) for record in records]
         COMMERCIAL_PROJECTS_CACHE = [format_commercial_project(record) for record in commercial_records]
         RESIDENTIAL_PROPERTIES_CACHE = [format_residential_property(record) for record in residential_inventory_records]
+        LOCALITIES_CACHE = [format_locality(record) for record in localities_records]
         print('-'*100)
-        print(RESIDENTIAL_PROPERTIES_CACHE[0])
-        #match_properties_to_projects(RESIDENTIAL_PROPERTIES_CACHE, 'residential')
-        #match_properties_to_projects(RESIDENTIAL_PROPERTIES_CACHE, 'commercial') to be added later
         build_commercial_projects_index()
         build_residential_projects_index()
         print(f"Cache initialized successfully with {len(RESIDENTIAL_PROPERTIES_CACHE)} residential properties")
+        
+        # Set memory flag instead of file flag
+        CACHE_INITIALIZED = True
     except Exception as e:
         logger.error(f"Error initializing cache: {str(e)}")
         RESIDENTIAL_PROJECTS_CACHE = []
         COMMERCIAL_PROJECTS_CACHE = []
+        RESIDENTIAL_PROPERTIES_CACHE = []
+        LOCALITIES_CACHE = []
 
-@app.route("/health", methods=["GET"])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "cache_size": len(RESIDENTIAL_PROJECTS_CACHE)
-    })
+def ensure_cache_initialized():
+    """Ensure cache is initialized without blocking requests"""
+    global CACHE_INITIALIZATION_STARTED, CACHE_INITIALIZED
+    
+    # If already initialized, do nothing
+    if CACHE_INITIALIZED:
+        return True
+    
+    # If initialization is in progress, just return
+    if CACHE_INITIALIZATION_STARTED:
+        return False
+    
+    # Start initialization in a background thread
+    CACHE_INITIALIZATION_STARTED = True
+    threading.Thread(target=_initialize_cache_in_background).start()
+    return False
 
-@app.route("/update_cache", methods=["GET"])
-def update_cache():
-    """Endpoint to manually update the cache"""
+def _initialize_cache_in_background():
+    """Initialize cache in background thread"""
+    global CACHE_INITIALIZED
     try:
         init_cache()
+        # CACHE_INITIALIZED is now set in init_cache()
+        print("Cache initialization completed successfully")
+    except Exception as e:
+        logger.error(f"Background cache initialization failed: {str(e)}")
+
+# Update route handlers to use lazy loading
+@app.route("/status", methods=["GET"])
+def status():
+    """Health check endpoint"""
+    try:
+         # Add cache initialization check
+        if not ensure_cache_initialized():
+            # Return a response indicating cache is loading
+            return jsonify({
+                "status": "initializing",
+                "message": "Data is being loaded. Please try again in a few minutes."
+            }), 202  # 202 Accepted status code
+    except Exception as e:
+        return jsonify({
+            "status": "warning",
+            "message": "Service running but cache not initialized",
+            "error": str(e)
+        })
+
+@app.route("/get_localities", methods=["GET"])
+def get_localities():
+    """Get all localities, properly formatted and sorted alphabetically"""
+
+    try:
+            # Add cache initialization check
+        if not ensure_cache_initialized():
+        # Return a response indicating cache is loading
+            return jsonify({
+            "status": "initializing",
+            "message": "Data is being loaded. Please try again in a few minutes."
+        }), 202  # 202 Accepted status code
+        # Convert all localities to title case and sort
+        formatted_localities = sorted(
+            [loc['name'].strip().title() for loc in LOCALITIES_CACHE if loc.get("name")]
+        )
         return jsonify({
             "status": "success",
-            "message": "Cache updated successfully",
-            "total_projects": len(RESIDENTIAL_PROJECTS_CACHE)
+            "localities": formatted_localities
         })
     except Exception as e:
-        logger.error(f"Cache update failed: {str(e)}")
+        logger.error(f"Error fetching localities: {str(e)}")
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": "Failed to fetch localities"
         }), 500
 
-def match_properties_to_projects(properties: list, type: str):
-    """Match properties to projects based on project name similarity"""
-    try:
-        for property in properties:
-            property_name = property.get('name', '').lower() # it should be same for residential and commercial
-            # Find matching projects by name using the utility function
-            if type.lower() == "residential":
-                for project in RESIDENTIAL_PROJECTS_CACHE:
-                    project_name = project.get('name', '').lower()
-                    # Check if names match using the custom function
-                    if match_project_names_to_properties(property_name, project_name):
-                    # If names match, check for exact locality match
-                        residential_inventory_table.update(property.get("airtable_id"), {'residential projects': [project.get("airtable_id")]})
-                        print(f"Updated property {property.get('name')} with project {project.get('name')}")
+# @app.route("/update_cache", methods=["GET"])
+# def update_cache():
+#     """Endpoint to manually update the cache"""
+#     try:
+#         init_cache()
+#         return jsonify({
+#             "status": "success",
+#             "message": "Cache updated successfully",
+#             "total_projects": len(RESIDENTIAL_PROJECTS_CACHE)
+#         })
+#     except Exception as e:
+#         logger.error(f"Cache update failed: {str(e)}")
+#         return jsonify({
+#             "status": "error",
+#             "message": str(e)
+#         }), 500
 
-            elif type.lower() == "commercial":
-                for project in COMMERCIAL_PROJECTS_CACHE:
-                    project_name = project.get('name', '').lower()
-                    if match_project_names_to_properties(property_name, project_name):
-                        # update the property with the commercial project rera number
-                        print(f"Match found for property {property.get('name')} with project {project.get('name')}")
         
     except Exception as e:
         logger.error(f"Error in matching properties to projects: {str(e)}")
         return []
+
+def filter_residential_properties(properties: list, 
+    price_min: float = None, 
+    price_max: float = None, 
+    bhk: Union[str, list] = None,
+    transaction_type: str = None,
+    propertyType: Union[str, list] = None,
+    locality: Union[str, list] = None
+) -> list:
+    """
+    Filters the list of properties based on various criteria.
+    
+    Sample property structure:
+    {
+        'name': 'Kalhaar Blues And Greens',
+        'price': 150000,
+        'transactionType': 'rent',
+        'locality': ['Sanand'],  # Note: locality is a list
+        'property_type': 'Bungalow/Villa',
+        'bhk': '4 BHK',
+        ...
+    }
+    """
+    # Convert single values to lists for consistent handling
+    # Convert bhk parameter to a list of lowercase strings
+    if bhk:
+        if isinstance(bhk, str):
+            bhk_values = [bhk.lower()]
+        else:  # it's already a list
+            bhk_values = [b.lower() for b in bhk]
+    else:
+        bhk_values = None
+    propertyTypes = [propertyType] if isinstance(propertyType, str) else propertyType if propertyType else None
+    localities = [locality] if isinstance(locality, str) else locality if locality else None
+
+    if localities:
+        localities = [loc.strip().lower() for loc in localities]
+
+    if propertyTypes:
+        propertyTypes = [prop_type.strip().lower() for prop_type in propertyTypes]
+
+    filtered = []
+    for prop in properties:
+        try:
+            # Price handling
+            prop_price = prop.get("price")
+            if isinstance(prop_price, str):
+                try:
+                    prop_price = float(prop_price.replace(',', '').replace('₹', '').strip())
+                except (ValueError, TypeError):
+                    prop_price = None
+
+            # Apply filters only if they are provided
+            # Price filter
+            if price_min is not None and (prop_price is None or prop_price < price_min):
+                continue
+            if price_max is not None and (prop_price is None or prop_price > price_max):
+                continue
+
+            # BHK filter (exact match including "BHK")
+            if bhk_values:
+                prop_bhk = prop.get("bhk", "").lower()
+                if not any(bhk_val in prop_bhk for bhk_val in bhk_values):
+                    continue
+
+            # Transaction type filter (exact match)
+            if transaction_type and prop.get("transactionType") != transaction_type:
+                continue
+
+            # Property type filter (exact match)
+            if propertyTypes:
+                prop_type = prop.get("propertyType", "").lower()
+                # Skip this property if its type doesn't match any requested types
+                if prop_type not in propertyTypes:
+                    continue
+
+            # Locality filter (check if any requested locality is in the property's locality list)
+            if localities:
+                  # Get the property locality and ensure it's a list
+                prop_locality = prop.get("locality", "")
+                # If it's a string, convert it to a list
+                if isinstance(prop_locality, str):
+                    prop_localities = [prop_locality.lower()]  # Convert string to list with lowercase
+                else:
+                    prop_localities = [loc.lower() for loc in prop_locality]  # Assume it's a list
+
+                if not any(loc in prop_localities for loc in localities):
+                    continue
+
+            filtered.append(prop)
+
+        except Exception as e:
+            logger.error(f"Error filtering property: {str(e)}")
+            logger.error(f"Problematic property: {prop}")
+            continue
+
+    return filtered
 
 @app.route("/commercial_projects", methods=["GET"])
 def get_commercial_projects():
@@ -356,10 +545,15 @@ def get_commercial_projects():
     - Regular pagination: limit, offset
     - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
     """
+    
     try:
-        # If cache is empty, initialize it
-        if not COMMERCIAL_PROJECTS_CACHE:
-            init_cache()
+            # Add cache initialization check
+        if not ensure_cache_initialized():
+        # Return a response indicating cache is loading
+            return jsonify({
+            "status": "initializing",
+            "message": "Data is being loaded. Please try again in a few minutes."
+        }), 202  # 202 Accepted status code
             
         # Parse pagination parameters
         #limit = min(500, max(1, int(request.args.get("limit", 12))))
@@ -438,11 +632,16 @@ def get_residential_projects():
     - Regular pagination: limit, offset
     - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
     """
+    
     try:
-        # If cache is empty, initialize it
-        if not RESIDENTIAL_PROJECTS_CACHE:
-            init_cache()
-            
+            # Add cache initialization check
+        if not ensure_cache_initialized():
+        # Return a response indicating cache is loading
+            return jsonify({
+            "status": "initializing",
+            "message": "Data is being loaded. Please try again in a few minutes."
+        }), 202  # 202 Accepted status code
+
         # Parse pagination parameters
         #limit = min(500, max(1, int(request.args.get("limit", 12))))
         limit = max(1, int(request.args.get("limit", 12)))
@@ -515,6 +714,7 @@ def get_residential_projects():
 def search_commercial_projects():
     """Search commercial projects by name with pagination and offset"""
     try:
+
         search_term = request.args.get("q", "").lower().strip()
         limit = min(100, max(1, int(request.args.get("limit", 12))))
         offset = max(0, int(request.args.get("offset", 0)))
@@ -758,6 +958,35 @@ def get_projects_in_viewport(projects_cache: list, viewport_params: dict, pagina
     
     return response
 
+@app.route("/residential_property_by_id", methods=["GET"])
+def get_residential_property_by_id():
+    """
+    Get residential property by ID
+    """
+    try:
+            # Add cache initialization check
+        if not ensure_cache_initialized():
+        # Return a response indicating cache is loading
+            return jsonify({
+            "status": "initializing",
+            "message": "Data is being loaded. Please try again in a few minutes."
+        }), 202  # 202 Accepted status code
+        
+        property_id = request.args.get("propertyId")
+        for property in RESIDENTIAL_PROPERTIES_CACHE:
+            if property["airtable_id"] == property_id:
+                return jsonify(property)
+        return jsonify({
+            "status": "error",
+            "message": "Property not found"
+        }), 404
+    except Exception as e:
+        logger.error(f"Error fetching residential property by ID: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "Internal server error"
+        }), 500
+
 @app.route("/residential_properties", methods=["GET"])
 def get_residential_properties():
     """
@@ -768,11 +997,46 @@ def get_residential_properties():
     - Viewport filtering: minLat, maxLat, minLng, maxLng (all optional)
     """
     try:
-        # If cache is empty, initialize it
-        if not RESIDENTIAL_PROPERTIES_CACHE:
-            print("Residential properties cache is empty, initializing it")
-            init_cache()
-            
+        # Start initialization if needed but don't wait for it
+        if not ensure_cache_initialized():
+            # Return a response indicating cache is loading
+            return jsonify({
+                "status": "initializing",
+                "message": "Data is being loaded. Please try again in a few minutes.",
+                "properties": [],
+                "total": 0
+            }), 202  # 202 Accepted status code
+        
+        # Parse price filters
+        price_min = request.args.get("priceMin")
+        price_max = request.args.get("priceMax")
+        price_min = float(price_min) if price_min else None
+        price_max = float(price_max) if price_max else None
+
+        # Parse list filters (handle both single values and comma-separated lists)
+        bhk = request.args.get("bhk")
+        bhk = bhk.split(",") if bhk and "," in bhk else bhk
+
+        propertyType = request.args.get("propertyType")
+        propertyType = propertyType.split(",") if propertyType and "," in propertyType else propertyType
+
+        locality = request.args.get("locality")
+        locality = locality.split(",") if locality and "," in locality else locality
+
+        # Parse single value filters
+        transaction_type = request.args.get("transactionType")
+
+        # Apply filters
+        filtered_properties = filter_residential_properties(
+            RESIDENTIAL_PROPERTIES_CACHE,
+            price_min=price_min,
+            price_max=price_max,
+            bhk=bhk,
+            transaction_type=transaction_type,
+            propertyType=propertyType,
+            locality=locality
+        ) 
+
         # Parse pagination parameters
         limit = max(1, int(request.args.get("limit", 12)))
         offset = max(0, int(request.args.get("offset", 0)))
@@ -796,7 +1060,7 @@ def get_residential_properties():
             }
             
             result = get_properties_in_viewport(
-                RESIDENTIAL_PROPERTIES_CACHE,
+                filtered_properties,
                 viewport_params,
                 pagination_params
             )
@@ -807,11 +1071,11 @@ def get_residential_properties():
             end = offset + limit
             
             # Check if offset exceeds total available data
-            if offset >= len(RESIDENTIAL_PROPERTIES_CACHE):
+            if offset >= len(filtered_properties):
                 return jsonify({
                     "status": "success",
                     "properties": [],
-                    "total": len(RESIDENTIAL_PROPERTIES_CACHE),
+                    "total": len(filtered_properties),
                     "limit": limit,
                     "offset": offset,
                     "has_more": False,
@@ -820,11 +1084,11 @@ def get_residential_properties():
             
             return jsonify({
                 "status": "success",
-                "properties": RESIDENTIAL_PROPERTIES_CACHE[start:end],
-                "total": len(RESIDENTIAL_PROPERTIES_CACHE),
+                "properties": filtered_properties[start:end],
+                "total": len(filtered_properties),
                 "limit": limit,
                 "offset": offset,
-                "has_more": end < len(RESIDENTIAL_PROPERTIES_CACHE)
+                "has_more": end < len(filtered_properties)
             })
             
     except ValueError as e:
@@ -841,8 +1105,7 @@ def get_residential_properties():
         }), 500
 
 if __name__ == "__main__":
-    # Initialize cache at startup
-    init_cache()
-    # Development server
-    app.run(host='0.0.0.0', debug=True, port=int(os.environ.get('PORT', 8091)))
+    # Don't initialize cache at startup
+    # Let it initialize on first request instead
+    app.run(host='0.0.0.0', debug=True, port=int(os.environ.get('PORT', 8080)))
     

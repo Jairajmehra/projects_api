@@ -1,7 +1,7 @@
 runtime: python39
-entrypoint: gunicorn -b :$PORT app:app
+entrypoint: gunicorn -b :$PORT main:app --timeout 600
 
-instance_class: F1
+instance_class: F4
 
 automatic_scaling:
   target_cpu_utilization: 0.8
@@ -11,8 +11,10 @@ automatic_scaling:
 
 env_variables:
   AIRTABLE_API_KEY: "pat58wdyhkYY9AaF9.c1ec6de961cb307900f1bfb3d274f69814b1942cec3055650d96190319d432a6"
-  BASE_ID: "appr3XO1WxxZjPCJg"
-  RESIDENTIAL_TABLE_NAME: "tblfADLQwmwUzuegD"
-  COMMERCIAL_TABLE_NAME: "Commercial"
+  PROJECTS_BASE_ID: "appr3XO1WxxZjPCJg"
+  RESIDENTIAL_PROJECTS_TABLE_ID: "tbldrAMLqVRxcubCT"
+  COMMERCIAL_PROJECTS_TABLE_ID: "tblQYd3746M4ZorMe"
   INVENTORY_BASE_ID: "appjTVy4N5NFI7q0g"
-  RESIDENTIAL_RENT_PROPERTIES_TABLE_ID: "tblJn9pCVgEwvFn2K"
+  RESIDENTIAL_PROPERTIES_TABLE_ID: "tblJn9pCVgEwvFn2K"
+  COMMERCIAL_PROPERTIES_TABLE_ID: "tblO7vABaJNJher4G"
+  LOCALITIES_TABLE_ID: "tblApNkzHIRsBGeRR"
